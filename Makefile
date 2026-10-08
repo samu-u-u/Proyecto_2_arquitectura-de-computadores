@@ -13,7 +13,7 @@ TOP  := pochoco_soc
 PCF  := goboard.pcf
 
 # RTL Sources
-SRC  := $(wildcard ./rtl/*.v ./rtl/**/*.v)
+SRC  := $(wildcard ./rtl/*.v ./rtl/**/*.v) game_top.v
 
 # Build Targets
 JSON := $(TOP).json
