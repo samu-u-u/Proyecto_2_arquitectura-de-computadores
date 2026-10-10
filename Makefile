@@ -9,7 +9,7 @@
 # - Nicolás Villegas <navillegas@miuandes.cl>
 
 # Configuration
-TOP  := pochoco_soc
+TOP  := game_top      # CAMBIO DE POCHOCO_SOC A GAME_TOP 
 PCF  := goboard.pcf
 
 # RTL Sources
