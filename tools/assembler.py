@@ -19,8 +19,25 @@ def enc_j(opcode,rd,imm):
     return (((imm >> 20) & 1) << 31) | (((imm >> 1) & 0x3FF) << 21) | (((imm >> 11) & 1) << 20) | (((imm >> 12) & 0xFF) << 12) | (rd << 7) | opcode
 def enc_b(opcode, funct3, rs1,rs2,imm):
     return (((imm >> 12) & 1) << 31) | (((imm >> 5) & 0x3F) << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (((imm >> 1) & 0xF) << 8) | (((imm >> 11) & 1) << 7) | opcode
+#validaciones 
+MAX_PALABRAS = 512
+PSEUDO_OPERANDOS = {"nop": 0, "mv": 2, "j": 1, "beqz": 2, "bnez": 2, "li": 2}
+FORMATO_OPERANDOS = {"R": 3, "I": 3, "L": 2, "S": 2, "U": 2, "B": 3, "J": 2}
 
 
+def verificar_cantidad(mnemonico, operandos, esperado):
+    if len(operandos) != esperado:
+        raise ValueError(f"'{mnemonico}' espera {esperado} operandos, recibio {len(operandos)}")
+
+
+def parse_imm(texto, minimo, maximo):
+    try:
+        valor = int(texto, 0)
+    except ValueError:
+        raise ValueError(f"inmediato invalido: '{texto}'")
+    if not (minimo <= valor <= maximo):
+        raise ValueError(f"inmediato fuera de rango: {valor} (permitido {minimo} a {maximo})")
+    return valor
  
 # recibe el texto con comas y comentarios y lo los separa y organiza. 
 REGS = {f"x{i}": i for i in range(16)}
@@ -60,16 +77,14 @@ def parse_reg(texto):
         raise ValueError(f"registro invalido: {texto}")
 # ejemplo 4(x2)
 def parse_mem(texto):
-    partes=texto.lower().split("(")
-    offset= partes[0].strip()
-    reg=partes[1].strip(")")
-    if offset == "":
-        offset = 0
-    else:
-        offset = int(offset, 0)
+    if "(" not in texto or not texto.strip().endswith(")"):
+        raise ValueError(f"operando de memoria invalido: '{texto}' (use offset(registro))")
+    partes = texto.lower().split("(")
+    offset = partes[0].strip()
+    reg = partes[1].strip(")")
+    offset = 0 if offset == "" else parse_imm(offset, -2048, 2047)
+    return (offset, parse_reg(reg))
 
-    reg = parse_reg(reg)
-    return (offset, reg)
 
 def separar(linea):
     linea = linea.split("#")[0]
@@ -85,10 +100,13 @@ def separar(linea):
         operandos.append(op.strip())
     return (mnemonico, operandos)
 # calcula el salto 
-def calcular_offset(destino, pc, etiquetas):
+def calcular_offset(destino, pc, etiquetas, minimo=-4096, maximo=4094):
     if destino not in etiquetas:
         raise ValueError(f"etiqueta no definida: {destino}")
-    return etiquetas[destino] - pc
+    offset = etiquetas[destino] - pc
+    if not (minimo <= offset <= maximo):
+        raise ValueError(f"salto demasiado lejos: {offset} bytes (permitido {minimo} a {maximo})")
+    return offset
     
 
 
@@ -96,6 +114,7 @@ def ensamblar_instruccion(mnemonico, operandos, pc, etiquetas):
     if mnemonico not in TABLA:
         raise ValueError(f"instruccion desconocida: {mnemonico}")
     formato, opcode, funct3, funct7 = TABLA[mnemonico]
+    verificar_cantidad(mnemonico, operandos, FORMATO_OPERANDOS[formato])
 
     if formato == "R":
         rd  = parse_reg(operandos[0])
@@ -106,12 +125,12 @@ def ensamblar_instruccion(mnemonico, operandos, pc, etiquetas):
     if formato == "I":
         rd  = parse_reg(operandos[0])
         rs1 = parse_reg(operandos[1])
-        imm = int(operandos[2], 0)
+        imm = parse_imm(operandos[2], -2048, 2047)
         return enc_i(opcode, rd, funct3, rs1, imm)
 
     if formato == "U":
         rd  = parse_reg(operandos[0])
-        imm = int(operandos[1], 0)
+        imm = parse_imm(operandos[1], 0, 0xFFFFF)
         return enc_u(opcode, rd, imm)
     
     if formato == "L": 
@@ -132,8 +151,20 @@ def ensamblar_instruccion(mnemonico, operandos, pc, etiquetas):
     
     if formato == "J":                          
         rd  = parse_reg(operandos[0])
-        imm = calcular_offset(operandos[1], pc, etiquetas)
+        imm = calcular_offset(operandos[1], pc, etiquetas, -1048576, 1048574)
         return enc_j(opcode, rd, imm)
+def ensamblar_linea(linea, pc=0, etiquetas={}, constantes={}):
+    etiqueta, mnemonico, operandos = analizar_linea(linea)
+    if mnemonico is None or mnemonico.startswith("."):
+        return []
+    operandos = sustituir_constantes(operandos, constantes)
+    palabras = []
+    for i, (m, o) in enumerate(expandir(mnemonico, operandos)):
+        palabras.append(ensamblar_instruccion(m, o, pc + 4 * i, etiquetas))
+    return palabras
+
+
+
 
 #ejemplo usado de los botones, 
 def analizar_linea(linea):
@@ -156,19 +187,62 @@ def analizar_linea(linea):
     operandos = [op.strip() for op in partes_d[1].split(",")]
     return (etiqueta, mnemonico, operandos)
 # la idea es que esto pueda recorrer las lineas y lleva cuenta de las direcciones (empieza en 0 y suma 4 por cada instruccion real)
-def primera_pasada(lineas):
+def primera_pasada(lineas, constantes={}):
     etiquetas = {}
     pc = 0
-    for linea in lineas:
+    for n, linea in enumerate(lineas, 1):
         etiqueta, mnemonico, operandos = analizar_linea(linea)
         if etiqueta is not None:
+            if etiqueta in etiquetas:
+                raise ValueError(f"linea {n}: etiqueta duplicada '{etiqueta}'")
             etiquetas[etiqueta] = pc
         if mnemonico is None or mnemonico.startswith("."):
             continue
-        pc += 4
+        operandos = sustituir_constantes(operandos, constantes)
+        try:
+            cantidad = len(expandir(mnemonico, operandos))
+        except ValueError:
+            cantidad = 1          
+        pc += 4 * cantidad
     return etiquetas
+# las dos funciones de abajo son para, ejemplo, li x5 ESPERA pasa a ser (con expandir) li x5, 75000000
 
+def sustituir_constantes(operandos, constantes):
+    nuevos = []
+    for op in operandos:
+        if "(" in op:                           
+            antes, resto = op.split("(", 1)
+            antes = antes.strip()
+            if antes in constantes:
+                antes = str(constantes[antes])
+            op = antes + "(" + resto
+        elif op in constantes:                  
+            op = str(constantes[op])
+        nuevos.append(op)
+    return nuevos
+
+def leer_constantes(lineas):
+    constantes = {}
+    for n, linea in enumerate(lineas, 1):
+        etiqueta, mnemonico, operandos = analizar_linea(linea)
+        if mnemonico == ".equ":
+            if len(operandos) != 2:
+                raise ValueError(f"linea {n}: .equ necesita: .equ NOMBRE, valor")
+            if operandos[0] in constantes:
+                raise ValueError(f"linea {n}: constante duplicada '{operandos[0]}'")
+            valor = sustituir_constantes([operandos[1]], constantes)[0]
+            try:
+                constantes[operandos[0]] = int(valor, 0)
+            except ValueError:
+                raise ValueError(f"linea {n}: valor invalido en .equ: '{operandos[1]}'")
+    return constantes
+
+
+
+# toma pseudoinstrucciones y las traduce a instrucciones basicas reales que el hardware de la CPU si save codificar en ceros y unos 
 def expandir(mnemonico, operandos):
+    if mnemonico in PSEUDO_OPERANDOS:
+        verificar_cantidad(mnemonico, operandos, PSEUDO_OPERANDOS[mnemonico])    #valñidacion 
     if mnemonico == "nop":
         return [("addi", ["x0", "x0", "0"])]
     if mnemonico == "mv":
@@ -179,6 +253,20 @@ def expandir(mnemonico, operandos):
         return [("beq", [operandos[0], "x0", operandos[1]])]
     if mnemonico == "bnez":
         return [("bne", [operandos[0], "x0", operandos[1]])]
+    if mnemonico == "li":
+        rd = operandos[0]
+        valor = parse_imm(operandos[1], -(1 << 31), (1 << 32) - 1) & 0xFFFFFFFF #parte de validacion  
+        if valor >= 0x80000000:
+            valor -= 1 << 32
+        if -2048 <= valor <= 2047:
+            return [("addi", [rd, "x0", str(valor)])]
+        bajo= valor& 0xFFF # son doce bits de abajo
+        if bajo >=2048:
+            bajo-=4096
+        alto=((valor-bajo) >> 12) &0xFFFFF
+        if bajo ==0: 
+            return [("lui", [rd, str(alto)])]
+        return [("lui", [rd, str(alto)]), ("addi", [rd, rd, str(bajo)])]
        
     return [(mnemonico, operandos)]
 
@@ -189,26 +277,41 @@ def ensamblar_archivo(entrada, salida):
     with open(entrada, encoding="utf-8") as f:
         lineas = f.readlines()
 
-    etiquetas = primera_pasada(lineas)           
+    try:
+        constantes = leer_constantes(lineas)
+        etiquetas = primera_pasada(lineas, constantes)
+    except ValueError as e:
+        raise ValueError(f"{entrada}, {e}")
 
     palabras = []
+    errores = []
     pc = 0
-    for linea in lineas:                       
-        codigo = ensamblar_instruccion(linea, pc, etiquetas)
-        if codigo is not None:
-            palabras.append(codigo)
-            pc += 4
+    for n, linea in enumerate(lineas, 1):
+        try:
+            nuevas = ensamblar_linea(linea, pc, etiquetas, constantes)
+        except ValueError as e:
+            errores.append(f"{entrada}, linea {n}: {e}")
+            nuevas = [0] * contar_palabras(linea, constantes)
+        palabras.extend(nuevas)
+        pc += 4 * len(nuevas)
+
+    if not errores and len(palabras) > MAX_PALABRAS:
+        errores.append(f"{entrada}: el programa tiene {len(palabras)} palabras "
+                       f"y la RAM solo admite {MAX_PALABRAS}")
+    if errores:
+        raise ValueError("\n".join(errores))
 
     with open(salida, "w", encoding="utf-8") as f:
         for p in palabras:
             f.write(f"{p:08x}\n")
-
     return len(palabras)
-if __name__ == "__main__":
-        import sys
-        if len(sys.argv) != 3:
-            print("Uso: python tools/assembler.py entrada.s salida.hex")
-            sys.exit(1)
-        n = ensamblar_archivo(sys.argv[1], sys.argv[2])
-        print(f"OK: {n} instrucciones -> {sys.argv[2]}")
 
+
+def contar_palabras(linea, constantes):
+    etiqueta, mnemonico, operandos = analizar_linea(linea)
+    if mnemonico is None or mnemonico.startswith("."):
+        return 0
+    try:
+        return len(expandir(mnemonico, sustituir_constantes(operandos, constantes)))
+    except ValueError:
+        return 1
