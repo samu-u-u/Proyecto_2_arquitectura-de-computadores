@@ -25,3 +25,6 @@ loop:
     lw   x1, 0(x2)                # read buttons
     sw   x1, 0(x3)                  # mirror to LEDs
     jal  x0, loop
+
+
+

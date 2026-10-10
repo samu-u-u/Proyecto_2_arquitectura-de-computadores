@@ -1,9 +1,9 @@
 import argparse
 import re
 import sys
-# encoders traducen traduce a bits
+# encoders traducen a bits
 #leer memoria 
-def enc_i(opcode, rd, funct3, rs1, imm): 
+def enc_i(opcode, rd, funct3, rs1, imm):                                             
     return((imm & 0xFFF)<< 20) | (rs1<< 15) | (funct3<< 12) | (rd << 7) | opcode
 # escribir memoria
 def enc_s (opcode, funct3, rs1, rs2, imm): 
@@ -99,6 +99,7 @@ def separar(linea):
     for op in partes[1].split(","):
         operandos.append(op.strip())
     return (mnemonico, operandos)
+
 # calcula el salto 
 def calcular_offset(destino, pc, etiquetas, minimo=-4096, maximo=4094):
     if destino not in etiquetas:
@@ -277,41 +278,30 @@ def ensamblar_archivo(entrada, salida):
     with open(entrada, encoding="utf-8") as f:
         lineas = f.readlines()
 
-    try:
-        constantes = leer_constantes(lineas)
-        etiquetas = primera_pasada(lineas, constantes)
-    except ValueError as e:
-        raise ValueError(f"{entrada}, {e}")
+    constantes = leer_constantes(lineas)                 # ← se crea aquí
+    etiquetas = primera_pasada(lineas, constantes)
 
     palabras = []
-    errores = []
     pc = 0
-    for n, linea in enumerate(lineas, 1):
-        try:
-            nuevas = ensamblar_linea(linea, pc, etiquetas, constantes)
-        except ValueError as e:
-            errores.append(f"{entrada}, linea {n}: {e}")
-            nuevas = [0] * contar_palabras(linea, constantes)
+    for linea in lineas:
+        nuevas = ensamblar_linea(linea, pc, etiquetas, constantes)
         palabras.extend(nuevas)
         pc += 4 * len(nuevas)
-
-    if not errores and len(palabras) > MAX_PALABRAS:
-        errores.append(f"{entrada}: el programa tiene {len(palabras)} palabras "
-                       f"y la RAM solo admite {MAX_PALABRAS}")
-    if errores:
-        raise ValueError("\n".join(errores))
 
     with open(salida, "w", encoding="utf-8") as f:
         for p in palabras:
             f.write(f"{p:08x}\n")
+
     return len(palabras)
 
-
-def contar_palabras(linea, constantes):
-    etiqueta, mnemonico, operandos = analizar_linea(linea)
-    if mnemonico is None or mnemonico.startswith("."):
-        return 0
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Ensamblador RV32E")
+    parser.add_argument("entrada", help="archivo .s de entrada")
+    parser.add_argument("salida", help="archivo .hex de salida")
+    args = parser.parse_args()
     try:
-        return len(expandir(mnemonico, sustituir_constantes(operandos, constantes)))
-    except ValueError:
-        return 1
+        n = ensamblar_archivo(args.entrada, args.salida)
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        sys.exit(1)
+    print(f"{args.entrada} -> {args.salida} ({n} palabras)")
