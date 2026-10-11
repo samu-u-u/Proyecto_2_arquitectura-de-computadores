@@ -7,6 +7,10 @@
 // 
 // Authors:
 // - Nicolás Villegas <navillegas@miuandes.cl>
+//
+// MODIFICACION DEL GRUPO (Proyecto 2): contador de ciclos de 32 bits,
+// legible por el programa en el offset 0x0C. Los dos bloques agregados
+// estan marcados con "AGREGADO PARA EL JUEGO".
 
 module pochoco_periph (
   input  wire        clk_i,
@@ -29,7 +33,26 @@ module pochoco_periph (
   // LEDs and raw digit registers
   reg [3:0]  led_q;
   reg [7:0]  digit_q;
-  
+
+  // ---- AGREGADO PARA EL JUEGO: contador de ciclos (32 bits) ----
+  // Registro libre que suma 1 en cada flanco de clk_i.
+  // El juego lo lee con lw desde el offset 0x0C (off = 3) y es la base
+  // de TODO el timing del proyecto:
+  //   - espera de 3 s   : 75.000.000 ciclos a 25 MHz
+  //   - décima de segundo: 2.500.000 ciclos
+  //   - semilla pseudoaleatoria del LED objetivo
+  // Costo en FPGA: 32 flip-flops + un sumador de 32 bits.
+  // No es escribible: el case de escritura ignora el offset 0x0C.
+  // Wrap-around: vuelve a 0 cada 2^32 ciclos (~171.8 s a 25 MHz);
+  // las diferencias (resta modulo 2^32) siguen siendo correctas.
+  reg [31:0] cycle_q;
+
+  always @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) cycle_q <= 32'b0;
+    else         cycle_q <= cycle_q + 32'd1;
+  end
+  // ---- fin del bloque agregado ----
+
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       led_q   <= 4'b0;
@@ -80,6 +103,8 @@ module pochoco_periph (
     else if (access & ~we_i) begin
       case (off)
         6'd2: rdata_o <= {28'b0, btn_i}; // Buttons
+        // ---- AGREGADO PARA EL JUEGO: lectura del contador ----
+        6'd3: rdata_o <= cycle_q;        // Cycle counter (offset 0x0C)
         default: rdata_o <= 32'b0;
       endcase
     end
