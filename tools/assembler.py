@@ -278,20 +278,51 @@ def ensamblar_archivo(entrada, salida):
     with open(entrada, encoding="utf-8") as f:
         lineas = f.readlines()
 
-    constantes = leer_constantes(lineas)                 # ← se crea aquí
-    etiquetas = primera_pasada(lineas, constantes)
+    errores = []
+    try:
+        constantes = leer_constantes(lineas)
+    except ValueError as e:
+        constantes = {}
+        errores.append(str(e))          # .equ duplicada / valor invalido
 
-    palabras = []
-    pc = 0
-    for linea in lineas:
-        nuevas = ensamblar_linea(linea, pc, etiquetas, constantes)
+    # primera pasada tolerante: no muere, acumula
+    etiquetas, pc = {}, 0
+    for n, linea in enumerate(lineas, 1):
+        etiqueta, mnemonico, operandos = analizar_linea(linea)
+        if etiqueta is not None:
+            if etiqueta in etiquetas:
+                errores.append(f"linea {n}: etiqueta duplicada '{etiqueta}'")
+            else:
+                etiquetas[etiqueta] = pc
+        if mnemonico is None or mnemonico.startswith("."):
+            continue
+        try:
+            cantidad = len(expandir(mnemonico, sustituir_constantes(operandos, constantes)))
+        except ValueError:
+            cantidad = 1                # se reportara en la segunda pasada
+        pc += 4 * cantidad
+
+    # segunda pasada: cada linea envuelta en try/except
+    palabras, pc = [], 0
+    for n, linea in enumerate(lineas, 1):
+        try:
+            nuevas = ensamblar_linea(linea, pc, etiquetas, constantes)
+        except ValueError as e:
+            errores.append(f"linea {n}: {e}")
+            nuevas = []
         palabras.extend(nuevas)
         pc += 4 * len(nuevas)
+
+    if len(palabras) > MAX_PALABRAS:
+        errores.append(f"programa demasiado grande: {len(palabras)} palabras "
+                       f"(maximo {MAX_PALABRAS})")
+
+    if errores:
+        raise ValueError("\n".join(errores))
 
     with open(salida, "w", encoding="utf-8") as f:
         for p in palabras:
             f.write(f"{p:08x}\n")
-
     return len(palabras)
 
 if __name__ == "__main__":

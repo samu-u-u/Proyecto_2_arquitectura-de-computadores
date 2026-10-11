@@ -96,7 +96,7 @@ module espino_decoder (
   assign imm_s = {{20{instr_i[31]}}, instr_i[31:25], instr_i[11:7]};
 
   assign imm_b = {{19{instr_i[31]}}, instr_i[31], instr_i[7],
-                  instr_i[30:25], instr_i[11:8], 1'b0};}
+                  instr_i[30:25], instr_i[11:8], 1'b0};
 
   assign imm_u = {instr_i[31:12], 12'b0};
   
